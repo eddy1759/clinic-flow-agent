@@ -1,0 +1,66 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  // output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Patient {
+  id  String  @id @default(uuid())
+  phoneHash String  @unique
+  encryptedName String
+  encryptedPhone  String
+  encryptedEmail  String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  appointments  Appointment[]
+  conversations Conversation[]
+  auditLogs   AuditLog[]
+
+  @@map("patients")
+}
+
+model Appointment {
+  id  String  @id @default(uuid())
+  patientId String
+  patient Patient @relation(fields: [patientId], references: [id])
+  startTime DateTime
+  endTime DateTime
+  status  String  @default("SCHEDULED") // SCHEDULED, CONFIRMED, CANCELLED, COMPLETED 
+  providerId  String? // Google Calendar Event ID
+  serviceType String
+  googleEventId String?
+  createdAt DateTime
+
+  @@map("appointments")
+}
+
+model Conversation {
+  id  String  @id @default(uuid())
+  patientId String
+  patient Patient @relation(fields: [patientId], references: [id])
+  channel     String // 'SMS', 'WEB', 'WHATSAPP'
+  history Json
+  updatedAt DateTime  @updatedAt
+
+  @@map("conversations")
+}
+
+model AuditLog {
+  id  String  @id @default(uuid())
+  action  String // 'VIEW_PATIENT', 'CREATE_APPT', 'SEND_MSG'
+  metadata  Json?
+  timestamp DateTime  @default(now())
+  patientId   String?
+  patient     Patient? @relation(fields: [patientId], references: [id])
+}
