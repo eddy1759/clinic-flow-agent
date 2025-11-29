@@ -17,22 +17,17 @@ export class PrismaService
   private readonly logger = new Logger(PrismaService.name);
 
   constructor(private readonly config: ConfigService) {
-    // 1. Create a standard Postgres Pool using the URL from .env
     const connectionString = config.get<string>('DATABASE_URL');
 
     const pool = new Pool({
       connectionString,
-      // Optional: standard pg config
-      max: 10, // connection pool size
+      max: 10,
       idleTimeoutMillis: 30000,
     });
 
-    // 2. Create the Prisma Adapter
     const adapter = new PrismaPg(pool);
-
-    // 3. Pass the adapter to the super class
     super({
-      adapter, // <--- This satisfies the "Using engine type 'client' requires 'adapter'" error
+      adapter,
       log: [
         { emit: 'stdout', level: 'warn' },
         { emit: 'stdout', level: 'error' },
