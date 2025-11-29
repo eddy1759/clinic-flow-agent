@@ -8,8 +8,8 @@ export class VoiceService {
   private openai: OpenAI;
   private readonly logger = new Logger(VoiceService.name);
 
-  // In-memory cache to store generated audio files for a short time (1 min)
-  // We use RAM instead of Disk for speed and HIPAA compliance (transient data)
+  // In-memory cache to store generated audio files for a short time
+  // Using RAM instead of Disk for speed and HIPAA compliance
   private audioCache = new Map<string, Buffer>();
   private readonly MAX_VOICE_CHARS = 500;
 
@@ -19,13 +19,9 @@ export class VoiceService {
     });
   }
 
-  /**
-   * 1. SPEECH-TO-TEXT (STT)
-   * Converts a raw audio buffer (from upload) into text using Whisper.
-   */
+  // STT - Converts a raw audio buffer (from upload) into text using Whisper.
   async transcribeBuffer(audioBuffer: Buffer): Promise<string> {
     try {
-      // Convert Buffer to a "File-like" object that OpenAI SDK accepts
       // We name it 'speech.webm' because browsers usually send WebM audio
       const file = await OpenAI.toFile(audioBuffer, 'speech.webm', {
         type: 'audio/webm',
@@ -34,8 +30,8 @@ export class VoiceService {
       const transcription = await this.openai.audio.transcriptions.create({
         file: file,
         model: 'whisper-1',
-        language: 'en', // Optimization: Force English for faster processing
-        prompt: 'Medical appointment context. Patient speaking.', // Context hint helps accuracy
+        language: 'en',
+        prompt: 'Medical appointment context. Patient speaking.', // Context hint to helps accuracy
       });
 
       const rawText = transcription.text;
@@ -47,15 +43,14 @@ export class VoiceService {
         );
       }
 
-      // 3. SANITIZATION: Content Moderation (OpenAI Moderation API)
-      // This checks for Hate, Self-Harm, Sexual, Violence, etc.
+      // check for Hate, Self-Harm, Sexual, Violence, etc.
       const moderation = await this.openai.moderations.create({
         input: rawText,
       });
 
       const result = moderation.results[0];
       if (result.flagged) {
-        // Log the category causing the flag for audit (but don't log the text if it's illegal content)
+        // Log the category causing the flag for audit
         const categories = Object.keys(result.categories).filter(
           (cat) => result.categories[cat],
         );
@@ -65,7 +60,6 @@ export class VoiceService {
         );
       }
 
-      // 4. Return Clean Text
       return rawText;
     } catch (error) {
       if (error instanceof BadRequestException) throw error;
@@ -75,11 +69,7 @@ export class VoiceService {
     }
   }
 
-  /**
-   * 2. TEXT-TO-SPEECH (TTS)
-   * Converts AI text response into an MP3 audio buffer.
-   * Returns a UUID key to retrieve the file.
-   */
+  // TTS - Converts AI text response into an MP3 audio buffer.
   async generateAudio(text: string): Promise<string> {
     try {
       const mp3 = await this.openai.audio.speech.create({
@@ -109,10 +99,6 @@ export class VoiceService {
     }
   }
 
-  /**
-   * 3. RETRIEVE AUDIO
-   * Used by the GET /voice/audio/:id endpoint to stream the file
-   */
   getAudioStream(id: string): Buffer | null {
     return this.audioCache.get(id) || null;
   }
