@@ -42,18 +42,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     this.logger.log(`📝 Text from ${payload.userId}: "${payload.text}"`);
 
-    // 1. Acknowledge & Show Thinking
     client.emit('bot_status', { status: 'thinking' });
 
     try {
-      // 2. Process via Agent
       const responseText = await this.agentService.handleMessage(
         payload.userId,
         payload.text,
-        'WEB', // Channel
+        'WEB',
       );
 
-      // 3. Send Text Response (No Audio for text input cost-saving)
       client.emit('bot_response', {
         type: 'text',
         text: responseText,
@@ -66,10 +63,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  /**
-   * EVENT 2: VOICE INPUT
-   * Payload: { userId: string, audio: Buffer }
-   */
   @SubscribeMessage('user_voice')
   async handleVoice(
     @MessageBody() payload: { userId: string; audio: Buffer },
@@ -80,45 +73,41 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     try {
       if (!payload.audio || (payload.audio as any).length < 1000) {
-        this.logger.warn(`Empty or too short audio payload from ${payload.userId}`);
+        this.logger.warn(
+          `Empty or too short audio payload from ${payload.userId}`,
+        );
         client.emit('bot_status', { status: 'idle' });
         return;
       }
 
-      // 1. Transcribe (Speech -> Text)
       const transcript = await this.voiceService.transcribeBuffer(
         Buffer.from(payload.audio),
       );
 
-      // 2. Hallucination Guard (The "FEMA" Fix)
       const isHallucination = this.checkHallucination(transcript);
       if (isHallucination) {
         client.emit('bot_status', { status: 'idle' });
-        return; // Silently ignore bad audio
+        return;
       }
 
       this.logger.log(`   Transcript: "${transcript}"`);
 
-      // Notify Frontend of the user's spoken text (so it appears in the chat bubble)
       client.emit('user_transcript', { text: transcript });
       client.emit('bot_status', { status: 'thinking' });
 
-      // 3. Process via Agent (Text -> Text)
       const responseText = await this.agentService.handleMessage(
         payload.userId,
         transcript,
         'VOICE', // Channel
       );
 
-      // 4. Generate Audio (Text -> Speech)
       client.emit('bot_status', { status: 'speaking' });
       const audioId = await this.voiceService.generateAudio(responseText);
 
-      // 5. Send Full Response
       client.emit('bot_response', {
         type: 'voice',
         text: responseText,
-        audioUrl: `/api/v1/voice/audio/${audioId}`, // Frontend will fetch this
+        audioUrl: `/api/v1/voice/audio/${audioId}`,
       });
     } catch (error) {
       this.handleError(client, error);
@@ -142,7 +131,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       'amara.org',
       'captioned by',
     ];
-    // If text matches bad phrases OR is dangerously short/empty
+
     if (badPhrases.some((p) => lower.includes(p)) || lower.length < 2) {
       this.logger.warn(`Ignored Hallucination: "${text}"`);
       return true;
