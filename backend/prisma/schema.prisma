@@ -6,7 +6,6 @@
 
 generator client {
   provider = "prisma-client-js"
-  // output   = "../generated/prisma"
 }
 
 datasource db {
@@ -36,11 +35,12 @@ model Appointment {
   patient Patient @relation(fields: [patientId], references: [id])
   startTime DateTime
   endTime DateTime
-  status  String  @default("SCHEDULED") // SCHEDULED, CONFIRMED, CANCELLED, COMPLETED 
-  providerId  String? // Google Calendar Event ID
+  status  String  @default("SCHEDULED")
+  providerId  String?
+  idempotencyKey String
   serviceType String
   googleEventId String?
-  createdAt DateTime
+  createdAt DateTime @default(now())
 
   @@map("appointments")
 }
@@ -49,7 +49,7 @@ model Conversation {
   id  String  @id @default(uuid())
   patientId String
   patient Patient @relation(fields: [patientId], references: [id])
-  channel     String // 'SMS', 'WEB', 'WHATSAPP'
+  channel     String
   history Json
   updatedAt DateTime  @updatedAt
 
@@ -58,7 +58,7 @@ model Conversation {
 
 model AuditLog {
   id  String  @id @default(uuid())
-  action  String // 'VIEW_PATIENT', 'CREATE_APPT', 'SEND_MSG'
+  action  String
   metadata  Json?
   timestamp DateTime  @default(now())
   patientId   String?
