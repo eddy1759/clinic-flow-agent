@@ -3,10 +3,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Mic, Send, StopCircle, Loader2, Activity } from "lucide-react";
-import { Navbar } from "@/components/Navbar";
+import { Mic, Send, StopCircle, Activity, Sparkles } from "lucide-react";
 
 // Types
 type Message = {
@@ -38,9 +37,6 @@ export default function ClinicChat() {
     }
   }, [messages, isThinking]);
 
-  // ----------------------------------------------------------------
-  // FIX: Define addMessage HERE (Before useEffect)
-  // ----------------------------------------------------------------
   const addMessage = (role: 'user' | 'bot', content: string) => {
     setMessages(prev => [...prev, { role, content, timestamp: new Date() }]);
   };
@@ -74,10 +70,6 @@ export default function ClinicChat() {
       alert(msg);
     });
     
-    // FIX 2: Set the socket state only once at the end of setup.
-    // We add the disable comment because this synchronous call is NECESSARY
-    // for initialization, even if the linter flags it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
     setSocket(socketInstance); 
 
     // 3. CLEANUP
@@ -86,7 +78,7 @@ export default function ClinicChat() {
             socketInstance.close(); 
         }
     };
-  }, [userId]); // userId is the only dependency needed // addMessage is stable, no need to add to deps if defined inside component, or wrap in useCallback
+  }, [userId]);
 
   // 2. Handle Text Send
   const sendText = () => {
@@ -139,141 +131,139 @@ export default function ClinicChat() {
   
   return (
     <div className="flex flex-col h-screen bg-slate-50">
-      {/* Global Navbar */}
-      <Navbar />
-
+     
       {/* Main Content */}
-      <main className="flex-1 flex items-center justify-center p-4 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-teal-50 via-slate-50 to-slate-100">
-        <Card className="w-full max-w-5xl h-[80vh] flex flex-col shadow-2xl border-0 ring-1 ring-black/5 overflow-hidden rounded-2xl bg-white/80 backdrop-blur-sm">
-          <div className="flex h-full">
+      <main className="flex-1 flex items-center justify-center p-4 md:p-8">
+        <Card className="w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl border-0 ring-1 ring-black/5 overflow-hidden rounded-3xl bg-white/90 backdrop-blur-xl">
+          
+          {/* Header */}
+          <CardHeader className="border-b px-8 py-5 bg-white/60 backdrop-blur-md sticky top-0 z-10">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="relative">
+                   <div className="w-12 h-12 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-full flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                      <Sparkles className="h-6 w-6 text-white" />
+                   </div>
+                   {socket?.connected && (
+                     <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white rounded-full shadow-sm"></span>
+                   )}
+                </div>
+                <div className="flex flex-col">
+                  <h1 className="text-xl font-bold text-slate-800 tracking-tight">Sarah</h1>
+                  <span className="text-xs text-slate-500 font-medium uppercase tracking-wider">AI Receptionist</span>
+                </div>
+              </div>
+              
+              <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-emerald-50 rounded-full border border-emerald-100">
+                <Activity className="h-3.5 w-3.5 text-emerald-600" />
+                <span className="text-xs font-medium text-emerald-700">
+                  {socket?.connected ? 'System Online' : 'Connecting...'}
+                </span>
+              </div>
+            </div>
+          </CardHeader>
+          
+          {/* Chat Area */}
+          <CardContent className="flex-1 flex flex-col p-0 overflow-hidden bg-slate-50/50 relative">
+            <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none"></div>
             
-            {/* Sidebar (Desktop Only) */}
-            <div className="hidden md:flex w-64 bg-slate-50/50 border-r flex-col p-6 gap-6">
-               <div>
-                  <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Quick Actions</h3>
-                  <div className="space-y-2">
-                    <Button variant="ghost" className="w-full justify-start text-slate-600 hover:text-primary hover:bg-primary/5">
-                       📅 Book Appointment
-                    </Button>
-                    <Button variant="ghost" className="w-full justify-start text-slate-600 hover:text-primary hover:bg-primary/5">
-                       💊 Refill Prescription
-                    </Button>
-                    <Button variant="ghost" className="w-full justify-start text-slate-600 hover:text-primary hover:bg-primary/5">
-                       📋 Lab Results
-                    </Button>
-                  </div>
-               </div>
-               
-               <div className="mt-auto">
-                 <Card className="bg-primary/5 border-primary/10 shadow-none">
-                   <CardContent className="p-4">
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                        <span className="text-sm font-medium text-slate-700">System Status</span>
+            <ScrollArea className="flex-1 p-6 md:p-8">
+              <div className="space-y-6 max-w-3xl mx-auto">
+                {messages.length === 0 && (
+                   <div className="flex flex-col items-center justify-center text-center mt-20 space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-700">
+                      <div className="w-16 h-16 bg-white rounded-2xl shadow-sm border flex items-center justify-center mb-2">
+                        <Sparkles className="h-8 w-8 text-emerald-500/80" />
                       </div>
-                      <p className="text-xs text-slate-500">
-                        {socket?.connected ? 'Voice Assistant Online' : 'Connecting to Server...'}
+                      <h3 className="text-lg font-semibold text-slate-700">How can I help you today?</h3>
+                      <p className="text-slate-400 max-w-xs text-sm leading-relaxed">
+                        I can help you book appointments, refill prescriptions, or answer general inquiries.
                       </p>
-                   </CardContent>
-                 </Card>
-               </div>
-            </div>
-
-            {/* Chat Interface */}
-            <div className="flex-1 flex flex-col bg-white">
-              <CardHeader className="border-b px-6 py-4 bg-white/50 backdrop-blur-sm">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="relative">
-                       <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
-                          <Activity className="h-5 w-5 text-primary" />
-                       </div>
-                       {socket?.connected && (
-                         <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-white rounded-full"></span>
-                       )}
-                    </div>
-                    <div className="flex flex-col">
-                      <h1 className="text-base font-bold text-slate-800">Sarah (AI Receptionist)</h1>
-                      <span className="text-xs text-slate-500 font-medium">Scheduling & General Inquiries</span>
+                      <div className="flex gap-2 mt-4">
+                        <Button variant="outline" className="text-xs rounded-full bg-white/50 hover:bg-white" onClick={() => setInput("Book a checkup")}>
+                          "Book a checkup"
+                        </Button>
+                        <Button variant="outline" className="text-xs rounded-full bg-white/50 hover:bg-white" onClick={() => setInput("Clinic hours?")}>
+                          "Clinic hours?"
+                        </Button>
+                      </div>
+                   </div>
+                )}
+                
+                {messages.map((m, i) => (
+                  <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2 duration-300`}>
+                    <div className={`max-w-[85%] md:max-w-[75%] p-4 md:p-5 rounded-2xl text-[15px] leading-relaxed shadow-sm ${
+                      m.role === 'user' 
+                        ? 'bg-slate-900 text-white rounded-br-none shadow-slate-900/10' 
+                        : 'bg-white border border-slate-100 text-slate-700 rounded-bl-none shadow-sm'
+                    }`}>
+                      {m.content}
                     </div>
                   </div>
-                </div>
-              </CardHeader>
-              
-              <CardContent className="flex-1 flex flex-col p-0 overflow-hidden bg-slate-50/30">
-                <ScrollArea className="flex-1 p-6">
-            <div className="space-y-4">
-              {messages.length === 0 && (
-                 <div className="text-center text-gray-400 mt-10">
-                    👋 Hi! I can help you book appointments.<br/>
-                    Try saying &quot;Book a checkup for tomorrow&quot;.
-                 </div>
-              )}
-              
-              {messages.map((m, i) => (
-                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[80%] p-4 rounded-2xl text-sm shadow-sm ${
-                    m.role === 'user' 
-                      ? 'bg-primary text-primary-foreground rounded-br-none' 
-                      : 'bg-white border text-foreground rounded-bl-none'
-                  }`}>
-                    {m.content}
-                  </div>
-                </div>
-              ))}
+                ))}
 
-              {isThinking && (
-                <div className="flex justify-start">
-                  <div className="bg-white border p-4 rounded-2xl rounded-bl-none flex items-center gap-2 shadow-sm">
-                    <div className="flex space-x-1">
-                      <div className="w-2 h-2 bg-primary/60 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                      <div className="w-2 h-2 bg-primary/60 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                      <div className="w-2 h-2 bg-primary/60 rounded-full animate-bounce"></div>
+                {isThinking && (
+                  <div className="flex justify-start animate-in fade-in slide-in-from-bottom-2">
+                    <div className="bg-white border border-slate-100 p-4 rounded-2xl rounded-bl-none flex items-center gap-3 shadow-sm">
+                      <div className="flex space-x-1.5">
+                        <div className="w-2 h-2 bg-emerald-500/60 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                        <div className="w-2 h-2 bg-emerald-500/60 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                        <div className="w-2 h-2 bg-emerald-500/60 rounded-full animate-bounce"></div>
+                      </div>
+                      <span className="text-xs text-slate-400 font-medium">Sarah is typing...</span>
                     </div>
-                    <span className="text-xs text-muted-foreground ml-2">Sarah is typing...</span>
                   </div>
-                </div>
-              )}
-              <div ref={scrollRef} />
-            </div>
-          </ScrollArea>
+                )}
+                <div ref={scrollRef} />
+              </div>
+            </ScrollArea>
 
-          {/* Input Area */}
-          <div className="p-4 bg-white border-t flex items-center gap-3">
-            <input
-              className="flex-1 bg-slate-50 border-slate-200 border rounded-full px-5 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
-              placeholder="Type or speak..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && sendText()}
-              disabled={isRecording}
-            />
-            
-            {input.trim() ? (
-               <Button size="icon" className="rounded-full h-12 w-12 bg-primary hover:bg-primary/90 shadow-md transition-all" onClick={sendText}>
-                 <Send className="h-5 w-5" />
-               </Button>
-            ) : (
-               <Button 
-                 size="icon" 
-                 variant={isRecording ? "destructive" : "default"}
-                 className={`rounded-full h-12 w-12 transition-all shadow-md ${
-                    isRecording 
-                    ? "animate-pulse ring-4 ring-destructive/30 scale-110" 
-                    : "bg-primary hover:bg-primary/90"
-                 }`}
-                 onMouseDown={startRecording}
-                 onMouseUp={stopRecording}
-                 onTouchStart={startRecording}
-                 onTouchEnd={stopRecording}
-               >
-                 {isRecording ? <StopCircle className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
-               </Button>
-            )}
-          </div>
-              </CardContent>
+            {/* Input Area */}
+            <div className="p-5 md:p-6 bg-white border-t border-slate-100/80 backdrop-blur-sm z-10">
+              <div className="max-w-3xl mx-auto flex items-center gap-3 relative">
+                <input
+                  className="flex-1 bg-slate-50 border-slate-200 border rounded-full pl-6 pr-14 py-4 text-[15px] focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-inner placeholder:text-slate-400"
+                  placeholder="Type your message..."
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && sendText()}
+                  disabled={isRecording}
+                />
+                
+                <div className="absolute right-2 flex items-center gap-1">
+                   {input.trim() ? (
+                      <Button 
+                        size="icon" 
+                        className="rounded-full h-10 w-10 bg-slate-900 hover:bg-slate-800 shadow-md transition-all duration-300" 
+                        onClick={sendText}
+                      >
+                        <Send className="h-4 w-4 text-white" />
+                      </Button>
+                   ) : (
+                      <Button 
+                        size="icon" 
+                        variant={isRecording ? "destructive" : "ghost"}
+                        className={`rounded-full h-10 w-10 transition-all duration-300 ${
+                           isRecording 
+                           ? "bg-red-500 hover:bg-red-600 animate-pulse ring-4 ring-red-500/20" 
+                           : "bg-emerald-500 hover:bg-emerald-600 text-white shadow-md hover:shadow-lg hover:-translate-y-0.5"
+                        }`}
+                        onMouseDown={startRecording}
+                        onMouseUp={stopRecording}
+                        onTouchStart={startRecording}
+                        onTouchEnd={stopRecording}
+                      >
+                        {isRecording ? <StopCircle className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                      </Button>
+                   )}
+                </div>
+              </div>
+              <div className="text-center mt-3">
+                 <p className="text-[10px] text-slate-400">
+                    Press and hold the microphone to speak
+                 </p>
+              </div>
             </div>
-          </div>
+          </CardContent>
         </Card>
       </main>
     </div>
