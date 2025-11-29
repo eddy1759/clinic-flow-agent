@@ -57,7 +57,6 @@ export class IncomingMessageDto {
   channel?: 'SMS' | 'WEB' | 'VOICE';
 }
 
-// --- 2. Response DTO for Type Safety ---
 class ChatResponseDto {
   @ApiProperty()
   status: string;
@@ -90,14 +89,11 @@ export class MessagingController {
     @Body() payload: IncomingMessageDto,
   ): Promise<ChatResponseDto> {
     const startTime = Date.now();
-
-    // Log entry (Audit trail for debugging)
     this.logger.log(
       `Incoming message from User: ${payload.userId} via ${payload.channel || 'WEB'}`,
     );
 
     try {
-      // 1. Delegate to the AI Agent
       const response = await this.agentService.handleMessage(
         payload.userId,
         payload.message,
@@ -107,27 +103,23 @@ export class MessagingController {
       const duration = Date.now() - startTime;
       this.logger.log(`Request processed successfully in ${duration}ms`);
 
-      // 2. Return standardized, timestamped JSON
       return {
         status: 'success',
         reply: response,
         timestamp: new Date().toISOString(),
       };
     } catch (error) {
-      // 3. Robust Error Handling
-      // Log the actual error stack for developers
       this.logger.error(
         `Failed to process message for User: ${payload.userId}`,
         error.stack,
       );
 
-      // Return a sanitized error to the client (Security)
       throw new HttpException(
         {
           status: 'error',
           message:
             'Unable to process your request at this time. Please try again later.',
-          error: error.message, // Optional: Remove this in strict production environments
+          error: error.message,
         },
         HttpStatus.INTERNAL_SERVER_ERROR,
       );

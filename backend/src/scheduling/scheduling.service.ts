@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
+import { v4 as uuidv4 } from 'uuid';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'src/common/prisma/prisma.service';
 import { EmailService } from 'src/common/email/email.service';
@@ -13,7 +14,6 @@ import {
   startOfDay,
   endOfDay,
   isBefore,
-  // isAfter,
   format,
   parseISO,
   areIntervalsOverlapping,
@@ -26,6 +26,17 @@ export enum AppointmentStatus {
   COMPLETED = 'COMPLETED',
 }
 
+export interface CreateAppointmentData {
+  patientId: string;
+  patientName: string;
+  patientEmail: string;
+  patientPhone: string;
+  providerId: string;
+  startTime: Date;
+  serviceType: string;
+  idempotencyKey?: string;
+}
+
 @Injectable()
 export class SchedulingService {
   private calendar: calendar_v3.Calendar;
@@ -35,6 +46,14 @@ export class SchedulingService {
   private readonly CLINIC_OPEN_HOUR = 9;
   private readonly CLINIC_CLOSE_HOUR = 17;
   private readonly SLOT_DURATION_MIN = 30;
+
+  private readonly SERVICE_DURATIONS: Record<string, number> = {
+    'General Consultation': 15,
+    'Dental Cleaning': 30,
+    Surgery: 60,
+    'Root Canal': 90,
+    'Follow Up': 30,
+  };
 
   constructor(
     private readonly prisma: PrismaService,
@@ -56,9 +75,15 @@ export class SchedulingService {
       });
       this.calendar = google.calendar({ version: 'v3', auth });
       this.calendarId = this.config.get<string>('CLINIC_CALENDAR_ID');
-      this.logger.log(`✅ Google Calendar connected: ${this.calendarId}`);
+      this.logger.log({
+        event: 'GCAL_INITIALIZED',
+        calendarId: this.calendarId,
+      });
     } catch (error) {
-      this.logger.error('Failed to initialize Google Calendar', error);
+      this.logger.error({
+        event: 'GCAL_INIT_FAILED',
+        error: error.message,
+      });
     }
   }
 
@@ -66,343 +91,391 @@ export class SchedulingService {
     dateStr: string,
     providerId: string = 'default',
   ): Promise<string[]> {
-    this.logger.log(
-      `Checking availability for Provider: ${providerId} on ${dateStr}`,
-    );
-    const targetDate = parseISO(dateStr);
+    const startTime = Date.now();
 
-    if (isNaN(targetDate.getTime())) return [];
+    this.logger.log({
+      event: 'AVAILABILITY_CHECK_START',
+      providerId,
+      date: dateStr,
+    });
 
-    const dayStart = startOfDay(targetDate);
-    const dayEnd = endOfDay(targetDate);
+    try {
+      const targetDate = parseISO(dateStr);
 
-    const gCalBusySlots = await this.fetchBusySlots(dayStart, dayEnd);
+      if (isNaN(targetDate.getTime())) {
+        this.logger.warn({
+          event: 'INVALID_DATE',
+          dateStr,
+        });
+        return [];
+      }
 
-    const availableSlots: string[] = [];
-    let currentSlot = new Date(targetDate);
-    currentSlot.setHours(this.CLINIC_OPEN_HOUR, 0, 0, 0);
+      const dayStart = startOfDay(targetDate);
+      const dayEnd = endOfDay(targetDate);
 
-    const clinicClose = new Date(targetDate);
-    clinicClose.setHours(this.CLINIC_CLOSE_HOUR, 0, 0, 0);
-    const now = new Date();
+      // Fetch busy slots from Google Calendar
+      const gCalBusySlots = await this.fetchBusySlots(dayStart, dayEnd);
 
-    // 3. Loop and Filter
-    while (
-      isBefore(addMinutes(currentSlot, this.SLOT_DURATION_MIN), clinicClose)
-    ) {
-      const slotEnd = addMinutes(currentSlot, this.SLOT_DURATION_MIN);
+      // Fetch busy slots from internal DB
+      const dbBusySlots = await this.prisma.appointment.findMany({
+        where: {
+          providerId,
+          status: {
+            in: [AppointmentStatus.CONFIRMED, AppointmentStatus.SCHEDULED],
+          },
+          startTime: { gte: dayStart, lt: dayEnd },
+        },
+        select: { startTime: true, endTime: true },
+      });
 
-      // Rule A: Cannot be in the past
-      if (isBefore(currentSlot, now)) {
+      const allBusySlots = [
+        ...gCalBusySlots,
+        ...dbBusySlots.map((appt) => ({
+          start: appt.startTime,
+          end: appt.endTime,
+        })),
+      ];
+
+      // Generate available slots
+      const availableSlots: string[] = [];
+      let currentSlot = new Date(targetDate);
+      currentSlot.setHours(this.CLINIC_OPEN_HOUR, 0, 0, 0);
+
+      const clinicClose = new Date(targetDate);
+      clinicClose.setHours(this.CLINIC_CLOSE_HOUR, 0, 0, 0);
+
+      const now = new Date();
+
+      // Loop through potential slots
+      while (
+        isBefore(addMinutes(currentSlot, this.SLOT_DURATION_MIN), clinicClose)
+      ) {
+        const slotEnd = addMinutes(currentSlot, this.SLOT_DURATION_MIN);
+
+        // Cannot be in the past
+        if (isBefore(currentSlot, now)) {
+          currentSlot = addMinutes(currentSlot, this.SLOT_DURATION_MIN);
+          continue;
+        }
+
+        // Check overlap with ALL Busy Events (GCal + DB)
+        const isBusy = allBusySlots.some((busy) =>
+          areIntervalsOverlapping(
+            { start: currentSlot, end: slotEnd },
+            { start: busy.start, end: busy.end },
+          ),
+        );
+
+        if (!isBusy) {
+          availableSlots.push(format(currentSlot, "yyyy-MM-dd'T'HH:mm:ssXXX"));
+        }
+
         currentSlot = addMinutes(currentSlot, this.SLOT_DURATION_MIN);
-        continue;
       }
 
-      // Rule B: Check overlap with GCal Events
-      const isBusy = gCalBusySlots.some((busy) =>
-        areIntervalsOverlapping(
-          { start: currentSlot, end: slotEnd },
-          { start: busy.start, end: busy.end },
-        ),
-      );
+      this.logger.log({
+        event: 'AVAILABILITY_CHECK_COMPLETE',
+        date: dateStr,
+        slotsFound: availableSlots.length,
+        duration_ms: Date.now() - startTime,
+      });
 
-      if (!isBusy) {
-        availableSlots.push(format(currentSlot, "yyyy-MM-dd'T'HH:mm:ssXXX"));
-      }
-
-      currentSlot = addMinutes(currentSlot, this.SLOT_DURATION_MIN);
+      return availableSlots;
+    } catch (error) {
+      this.logger.error({
+        event: 'AVAILABILITY_CHECK_FAILED',
+        date: dateStr,
+        error: error.message,
+        duration_ms: Date.now() - startTime,
+      });
+      return [];
     }
-
-    return availableSlots;
   }
 
-  async createAppointments(data: {
-    patientId: string;
-    patientName: string;
-    patientEmail: string;
-    patientPhone: string;
-    providerId: string;
-    startTime: Date;
-    serviceType: string;
-  }) {
-    // Standard duration is 60 minutes (adjust if your logic differs)
+  async createAppointment(data: CreateAppointmentData) {
+    const startTime = Date.now();
     const duration = this.getDuration(data.serviceType);
     const endTime = addMinutes(data.startTime, duration);
 
-    // // ---------------------------------------------------------
-    // // STEP 1: GUARD - Check Local Database for Conflicts
-    // // ---------------------------------------------------------
-    // const existingAppt = await this.prisma.appointment.findFirst({
-    //   where: {
-    //     status: {
-    //       in: [AppointmentStatus.CONFIRMED, AppointmentStatus.SCHEDULED],
-    //     },
-    //     // Logic: (StartA < EndB) and (EndA > StartB) means overlap
-    //     AND: [
-    //       { startTime: { lt: endTime } },
-    //       { endTime: { gt: data.startTime } },
-    //     ],
-    //   },
-    // });
+    const finalIdempotencyKey = data.idempotencyKey || uuidv4();
 
-    // if (existingAppt) {
-    //   this.logger.warn(`Double booking attempt blocked for ${data.startTime}`);
-    //   throw new ConflictException(
-    //     'This time slot is already booked in our system. Please choose another time.',
-    //   );
-    // }
+    this.logger.log({
+      event: 'BOOKING_ATTEMPT',
+      patientId: data.patientId,
+      requestedTime: data.startTime.toISOString(),
+      service: data.serviceType,
+    });
 
-    // // ---------------------------------------------------------
-    // // STEP 2: GUARD - Check Google Calendar directly (Real-time)
-    // // ---------------------------------------------------------
-    // // This catches cases where the doctor blocked a slot manually on their phone
-    // try {
-    //   const gCalCheck = await this.calendar.events.list({
-    //     calendarId: this.calendarId,
-    //     timeMin: data.startTime.toISOString(),
-    //     timeMax: endTime.toISOString(),
-    //     singleEvents: true,
-    //   });
+    try {
+      const hasGCalConflict = await this.checkGoogleCalendarConflict(
+        data.startTime,
+        endTime,
+      );
 
-    //   // If GCal returns any events that overlap, block it.
-    //   if (gCalCheck.data.items && gCalCheck.data.items.length > 0) {
-    //     this.logger.warn(`GCal conflict found for ${data.startTime}`);
-    //     throw new ConflictException(
-    //       'The calendar shows a conflict at this time (external event).',
-    //     );
-    //   }
-    // } catch (error) {
-    //   // If it's a ConflictException, rethrow it.
-    //   // If it's a Google API error, log it but maybe allow proceeding (fail open)
-    //   // or block (fail closed) depending on your risk tolerance.
-    //   if (error instanceof ConflictException) throw error;
-    //   this.logger.error('Error checking GCal conflicts', error);
-    // }
-
-    // // ---------------------------------------------------------
-    // // STEP 3: PROCEED WITH BOOKING (Logic remains the same)
-    // // ---------------------------------------------------------
-    // let googleEventId: string | null = null;
-
-    // try {
-    //   const gCalRes = await this.calendar.events.insert({
-    //     calendarId: this.calendarId,
-    //     sendUpdates: 'none',
-    //     requestBody: {
-    //       summary: `Appointmen with ${data.patientName} for ${data.serviceType}`,
-    //       description: `
-    //         Patient: ${data.patientName}
-    //         Email: ${data.patientEmail}
-    //         Service: ${data.serviceType}
-    //       `,
-    //       location: 'City Health Clinic, Main Office',
-    //       start: { dateTime: data.startTime.toISOString() },
-    //       end: { dateTime: endTime.toISOString() },
-    //     },
-    //   });
-    //   googleEventId = gCalRes.data.id || null;
-    // } catch (error) {
-    //   this.logger.error('Failed to create Google Calendar event', error);
-    // }
-
-    // if (data.patientEmail) {
-    //   const timeStr = data.startTime.toLocaleTimeString('en-US', {
-    //     hour: 'numeric',
-    //     minute: '2-digit',
-    //   });
-    //   // Fire and forget (don't await)
-    //   this.emailService.sendAppointmentConfirmation(
-    //     data.patientEmail,
-    //     data.patientName,
-    //     data.startTime,
-    //     timeStr,
-    //     data.serviceType,
-    //   );
-    // }
-
-    // return this.prisma.$transaction(async (tx) => {
-    //   const appointment = await tx.appointment.create({
-    //     data: {
-    //       patient: { connect: { id: data.patientId } },
-    //       createdAt: new Date(),
-    //       providerId: data.providerId,
-    //       startTime: data.startTime,
-    //       endTime: endTime,
-    //       serviceType: data.serviceType,
-    //       status: AppointmentStatus.CONFIRMED,
-    //       googleEventId: googleEventId,
-    //     },
-    //   });
-
-    //   await tx.auditLog.create({
-    //     data: {
-    //       action: 'CREATE_APPT',
-    //       patient: { connect: { id: data.patientId } },
-    //       metadata: {
-    //         appointmentId: appointment.id,
-    //         googleEventId,
-    //         time: data.startTime,
-    //         patientName: data.patientName,
-    //       },
-    //     },
-    //   });
-    //   return appointment;
-    // });
-    return this.prisma.$transaction(
-      async (tx) => {
-        // A. DB GUARD: Check for conflicts within the transaction scope
-        const conflict = await tx.appointment.findFirst({
-          where: {
-            status: {
-              in: [AppointmentStatus.CONFIRMED, AppointmentStatus.SCHEDULED],
-            },
-            AND: [
-              { startTime: { lt: endTime } },
-              { endTime: { gt: data.startTime } },
-            ],
-          },
+      if (hasGCalConflict) {
+        this.logger.warn({
+          event: 'BOOKING_BLOCKED_GCAL_CONFLICT',
+          patientId: data.patientId,
+          time: data.startTime.toISOString(),
         });
 
-        if (conflict) {
-          throw new ConflictException('Slot taken (DB Conflict)');
-        }
+        throw new ConflictException(
+          'This time slot is already booked in the calendar. Please choose a different time.',
+        );
+      }
 
-        // B. EXTERNAL GUARD: Check Google Calendar (Real-time)
-        // Note: We do this inside the transaction to ensure we don't hold the DB lock
-        // too long, but strictly speaking, external calls inside DB tx are discouraged.
-        // However, for booking integrity, we check it here or accept a compensation logic later.
-        try {
-          const gCalCheck = await this.calendar.events.list({
-            calendarId: this.calendarId,
-            timeMin: data.startTime.toISOString(),
-            timeMax: endTime.toISOString(),
-            singleEvents: true,
-          });
+      const availableSlots = await this.getAvailability(
+        format(data.startTime, 'yyyy-MM-dd'),
+        data.providerId,
+      );
 
-          if (gCalCheck.data.items && gCalCheck.data.items.length > 0) {
-            throw new ConflictException(
-              'Slot taken (Google Calendar Conflict)',
-            );
+      const requestedSlot = format(data.startTime, "yyyy-MM-dd'T'HH:mm:ssXXX");
+
+      if (!availableSlots.includes(requestedSlot)) {
+        this.logger.warn({
+          event: 'BOOKING_BLOCKED_SLOT_UNAVAILABLE',
+          patientId: data.patientId,
+          time: data.startTime.toISOString(),
+        });
+
+        throw new ConflictException(
+          'This slot was just booked by another patient. Please choose a different time.',
+        );
+      }
+
+      const appointment = await this.prisma.$transaction(
+        async (tx) => {
+          // prevent duplicate bookings from retries
+          if (finalIdempotencyKey) {
+            const existing = await tx.appointment.findFirst({
+              where: {
+                idempotencyKey: finalIdempotencyKey,
+                status: { not: AppointmentStatus.CANCELLED },
+              },
+            });
+
+            if (existing) {
+              this.logger.log({
+                event: 'BOOKING_IDEMPOTENT_RETURN',
+                appointmentId: existing.id,
+              });
+              return existing;
+            }
           }
-        } catch (error) {
-          if (error instanceof ConflictException) throw error;
-          // Log but don't fail transaction on Google API network blip, unless strict strictness needed
-          this.logger.error(
-            'GCal check failed, proceeding with DB lock',
-            error,
-          );
-        }
 
-        // C. CREATE EXTERNAL EVENT (Google Calendar)
-        let googleEventId: string | null = null;
-        try {
-          const gCalRes = await this.calendar.events.insert({
-            calendarId: this.calendarId,
-            sendUpdates: 'none',
-            requestBody: {
-              summary: `Appointment with ${data.patientName}`,
-              description: `Service: ${data.serviceType}\nPhone: ${data.patientPhone}`,
-              start: { dateTime: data.startTime.toISOString() },
-              end: { dateTime: endTime.toISOString() },
+          // Race Condition Protection
+          const conflict = await tx.appointment.findFirst({
+            where: {
+              status: {
+                in: [AppointmentStatus.CONFIRMED, AppointmentStatus.SCHEDULED],
+              },
+              AND: [
+                { startTime: { lt: endTime } },
+                { endTime: { gt: data.startTime } },
+              ],
             },
           });
-          googleEventId = gCalRes.data.id || null;
-        } catch (e) {
-          this.logger.error('Failed to create GCal event', e);
-        }
 
-        // D. ATOMIC INSERT (The Booking)
-        const appointment = await tx.appointment.create({
-          data: {
-            patient: { connect: { id: data.patientId } },
-            createdAt: new Date(),
-            providerId: data.providerId,
-            startTime: data.startTime,
-            endTime: endTime,
-            serviceType: data.serviceType,
-            status: AppointmentStatus.CONFIRMED,
-            googleEventId: googleEventId,
+          if (conflict) {
+            throw new ConflictException('Slot taken (DB Conflict)');
+          }
+
+          const newAppointment = await tx.appointment.create({
+            data: {
+              patient: { connect: { id: data.patientId } },
+              providerId: data.providerId,
+              startTime: data.startTime,
+              endTime: endTime,
+              serviceType: data.serviceType,
+              status: AppointmentStatus.CONFIRMED,
+              idempotencyKey: finalIdempotencyKey,
+              googleEventId: null, // Will be updated after GCal creation
+            },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              action: 'CREATE_APPT',
+              patient: { connect: { id: data.patientId } },
+              metadata: {
+                appointmentId: newAppointment.id,
+                time: data.startTime.toISOString(),
+                service: data.serviceType,
+              },
+            },
+          });
+
+          return newAppointment;
+        },
+        {
+          isolationLevel: 'Serializable', // Strongest isolation level
+          timeout: 10000, // 10 seconds max
+        },
+      );
+
+      let googleEventId: string | null = null;
+
+      try {
+        const gCalRes = await this.calendar.events.insert({
+          calendarId: this.calendarId,
+          sendUpdates: 'none',
+          requestBody: {
+            summary: `${data.serviceType} - ${data.patientName}`,
+            description: `
+              Patient: ${data.patientName}
+              Email: ${data.patientEmail}
+              Phone: ${data.patientPhone}
+              Service: ${data.serviceType}
+            `.trim(),
+            location: 'City Health Clinic, Main Office',
+            start: { dateTime: data.startTime.toISOString() },
+            end: { dateTime: endTime.toISOString() },
           },
         });
 
-        // E. AUDIT LOG
-        await tx.auditLog.create({
-          data: {
-            action: 'CREATE_APPT',
-            patient: { connect: { id: data.patientId } },
-            metadata: {
+        googleEventId = gCalRes.data.id || null;
+
+        // Update appointment with Google Event ID
+        await this.prisma.appointment.update({
+          where: { id: appointment.id },
+          data: { googleEventId },
+        });
+      } catch (error) {
+        this.logger.error({
+          event: 'GCAL_EVENT_CREATE_FAILED',
+          appointmentId: appointment.id,
+          error: error.message,
+        });
+      }
+
+      if (data.patientEmail) {
+        const timeStr = data.startTime.toLocaleTimeString('en-US', {
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+        });
+
+        this.emailService
+          .sendAppointmentConfirmation(
+            data.patientEmail,
+            data.patientName,
+            data.startTime,
+            timeStr,
+            data.serviceType,
+          )
+          .catch((err) => {
+            this.logger.error({
+              event: 'EMAIL_SEND_FAILED',
               appointmentId: appointment.id,
-              time: data.startTime,
-            },
-          },
-        });
-
-        // F. SEND EMAIL (Side Effect - do NOT await this to keep TX fast)
-        if (data.patientEmail) {
-          const timeStr = data.startTime.toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit',
+              error: err.message,
+            });
           });
-          this.emailService
-            .sendAppointmentConfirmation(
-              data.patientEmail,
-              data.patientName,
-              data.startTime,
-              timeStr,
-              data.serviceType,
-            )
-            .catch((err) => this.logger.error('Email failed', err));
-        }
+      }
 
-        return appointment;
-      },
-      {
-        // 3. SET ISOLATION LEVEL
-        // 'Serializable' ensures that if two requests run this exact logic at the same time,
-        // one will succeed and the other will fail with a serialization error.
-        isolationLevel: 'Serializable',
-        timeout: 10000, // 10s max for the transaction
-      },
-    );
+      this.logger.log({
+        event: 'BOOKING_SUCCESS',
+        appointmentId: appointment.id,
+        patientId: data.patientId,
+        time: data.startTime.toISOString(),
+        service: data.serviceType,
+        googleEventId,
+        duration_ms: Date.now() - startTime,
+      });
+
+      return appointment;
+    } catch (error) {
+      this.logger.error({
+        event: 'BOOKING_FAILED',
+        patientId: data.patientId,
+        time: data.startTime.toISOString(),
+        error: error.message,
+        duration_ms: Date.now() - startTime,
+      });
+
+      // Re-throw to be handled by agent
+      throw error;
+    }
   }
 
   async cancelAppointment(appointmentId: string) {
-    const appt = await this.prisma.appointment.findUnique({
-      where: { id: appointmentId },
+    const startTime = Date.now();
+
+    this.logger.log({
+      event: 'CANCEL_ATTEMPT',
+      appointmentId,
     });
 
-    if (!appt) throw new BadRequestException('Appointment not found');
-
-    if (appt.googleEventId) {
-      try {
-        await this.calendar.events.delete({
-          calendarId: this.calendarId,
-          eventId: appt.googleEventId,
-        });
-      } catch (error) {
-        this.logger.warn(
-          'Failed to delete GCal event, proceeding with local cancel',
-          error,
-        );
-      }
-    }
-
-    return this.prisma.$transaction(async (tx) => {
-      const updated = await tx.appointment.update({
+    try {
+      const appt = await this.prisma.appointment.findUnique({
         where: { id: appointmentId },
-        data: { status: AppointmentStatus.CANCELLED },
       });
 
-      await tx.auditLog.create({
-        data: {
-          action: 'CANCEL_APPT',
-          patientId: appt.patientId,
-          metadata: { appointmentId: appointmentId },
-        },
+      if (!appt) {
+        throw new BadRequestException('Appointment not found');
+      }
+
+      if (appt.status === AppointmentStatus.CANCELLED) {
+        this.logger.warn({
+          event: 'CANCEL_ALREADY_CANCELLED',
+          appointmentId,
+        });
+        return appt;
+      }
+
+      // Delete from Google Calendar
+      if (appt.googleEventId) {
+        try {
+          await this.calendar.events.delete({
+            calendarId: this.calendarId,
+            eventId: appt.googleEventId,
+          });
+        } catch (error) {
+          this.logger.warn({
+            event: 'GCAL_DELETE_FAILED',
+            appointmentId,
+            googleEventId: appt.googleEventId,
+            error: error.message,
+          });
+        }
+      }
+
+      // Update database
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const cancelled = await tx.appointment.update({
+          where: { id: appointmentId },
+          data: { status: AppointmentStatus.CANCELLED },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            action: 'CANCEL_APPT',
+            patientId: appt.patientId,
+            metadata: {
+              appointmentId,
+              cancelledAt: new Date().toISOString(),
+            },
+          },
+        });
+
+        return cancelled;
+      });
+
+      this.logger.log({
+        event: 'CANCEL_SUCCESS',
+        appointmentId,
+        duration_ms: Date.now() - startTime,
       });
 
       return updated;
-    });
+    } catch (error) {
+      this.logger.error({
+        event: 'CANCEL_FAILED',
+        appointmentId,
+        error: error.message,
+        duration_ms: Date.now() - startTime,
+      });
+      throw error;
+    }
   }
 
   private async fetchBusySlots(start: Date, end: Date) {
@@ -420,33 +493,51 @@ export class SchedulingService {
       ]);
 
       return (res.data.items || []).map((item) => ({
-        start: new Date(item.start.dateTime || item.start.date),
-        end: new Date(item.end.dateTime || item.end.date),
+        start: new Date(item.start?.dateTime || item.start?.date || start),
+        end: new Date(item.end?.dateTime || item.end?.date || end),
       }));
     } catch (error) {
-      this.logger.error('Failed to fetch GCal events', error);
+      this.logger.error({
+        event: 'GCAL_FETCH_FAILED',
+        error: error.message,
+      });
       return [];
     }
   }
 
-  private async checkConflict(start: Date, end: Date): Promise<boolean> {
-    const events = await this.fetchBusySlots(start, end);
-    return events.some((event) =>
-      areIntervalsOverlapping(
-        { start, end },
-        { start: event.start, end: event.end },
-      ),
-    );
+  private async checkGoogleCalendarConflict(
+    start: Date,
+    end: Date,
+  ): Promise<boolean> {
+    try {
+      const events = await this.fetchBusySlots(start, end);
+
+      const hasConflict = events.some((event) =>
+        areIntervalsOverlapping(
+          { start, end },
+          { start: event.start, end: event.end },
+        ),
+      );
+
+      if (hasConflict) {
+        this.logger.warn({
+          event: 'GCAL_CONFLICT_DETECTED',
+          start: start.toISOString(),
+          end: end.toISOString(),
+        });
+      }
+
+      return hasConflict;
+    } catch (error) {
+      this.logger.error({
+        event: 'GCAL_CONFLICT_CHECK_FAILED',
+        error: error.message,
+      });
+      return false;
+    }
   }
 
   private getDuration(serviceType: string): number {
-    const mapping: Record<string, number> = {
-      'Dental Cleaning': 30,
-      'General Consultation': 15,
-      Surgery: 60,
-      'Root Canal': 90,
-    };
-    // Default to 30 if unknown
-    return mapping[serviceType] || 30;
+    return this.SERVICE_DURATIONS[serviceType] || 30; // Default 30 min
   }
 }
