@@ -1,48 +1,46 @@
 import {
-  Controller,
-  Post,
   Body,
+  Controller,
   HttpException,
   HttpStatus,
   Logger,
+  Post,
   UsePipes,
   ValidationPipe,
-  //   UseGuards,
 } from '@nestjs/common';
 import {
-  ApiTags,
   ApiOperation,
-  ApiResponse,
   ApiProperty,
+  ApiResponse,
+  ApiTags,
 } from '@nestjs/swagger';
 import {
-  IsString,
+  IsEnum,
   IsNotEmpty,
   IsOptional,
-  IsEnum,
+  IsString,
   Length,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
-// import { ThrottlerGuard } from '@nestjs/throttler'; // Rate limiting
 import { AgentService } from '../agent/agent.service';
 
 export class IncomingMessageDto {
   @ApiProperty({
-    description: 'Unique identifier (Phone number or Session ID)',
+    description: 'Unique identifier (phone number or session ID)',
     example: '+14155551234',
   })
   @IsString()
   @IsNotEmpty()
-  @Transform(({ value }) => value?.trim()) // Auto-trim whitespace
+  @Transform(({ value }) => value?.trim())
   userId: string;
 
   @ApiProperty({
-    description: 'The user natural language message',
+    description: 'Natural-language message for the receptionist agent',
     example: 'I need to book an appointment',
   })
   @IsString()
   @IsNotEmpty()
-  @Length(1, 1000, { message: 'Message must be between 1 and 1000 characters' }) // Prevent massive payloads
+  @Length(1, 1000, { message: 'Message must be between 1 and 1000 characters' })
   @Transform(({ value }) => value?.trim())
   message: string;
 
@@ -76,32 +74,38 @@ export class MessagingController {
   constructor(private readonly agentService: AgentService) {}
 
   @Post('chat')
-  @ApiOperation({ summary: 'Process a message via the AI Agent' })
+  @ApiOperation({ summary: 'Process a text message through the receptionist agent' })
   @ApiResponse({
     status: 201,
     description: 'Message processed successfully',
     type: ChatResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Invalid input data' })
-  @ApiResponse({ status: 500, description: 'Internal AI processing failed' })
+  @ApiResponse({ status: 500, description: 'AI processing failed' })
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true }))
   async handleMessage(
     @Body() payload: IncomingMessageDto,
   ): Promise<ChatResponseDto> {
     const startTime = Date.now();
-    this.logger.log(
-      `Incoming message from User: ${payload.userId} via ${payload.channel || 'WEB'}`,
-    );
+    const channel = payload.channel || 'WEB';
+    this.logger.log({
+      event: 'MESSAGE_REQUEST_RECEIVED',
+      channel,
+      characters: payload.message.length,
+    });
 
     try {
       const response = await this.agentService.handleMessage(
         payload.userId,
         payload.message,
-        payload.channel || 'WEB',
+        channel,
       );
 
-      const duration = Date.now() - startTime;
-      this.logger.log(`Request processed successfully in ${duration}ms`);
+      this.logger.log({
+        event: 'MESSAGE_REQUEST_COMPLETED',
+        channel,
+        durationMs: Date.now() - startTime,
+      });
 
       return {
         status: 'success',
@@ -109,17 +113,17 @@ export class MessagingController {
         timestamp: new Date().toISOString(),
       };
     } catch (error) {
-      this.logger.error(
-        `Failed to process message for User: ${payload.userId}`,
-        error.stack,
-      );
+      this.logger.error({
+        event: 'MESSAGE_REQUEST_FAILED',
+        channel,
+        durationMs: Date.now() - startTime,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
 
       throw new HttpException(
         {
           status: 'error',
-          message:
-            'Unable to process your request at this time. Please try again later.',
-          error: error.message,
+          message: 'Unable to process your request at this time. Please try again later.',
         },
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
