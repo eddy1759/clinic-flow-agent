@@ -26,8 +26,14 @@ export class HealthController {
       database,
       integrations: {
         openai: Boolean(this.config.get<string>('OPENAI_API_KEY')),
-        googleCalendar: Boolean(this.config.get<string>('GOOGLE_CLIENT_EMAIL') && this.config.get<string>('GOOGLE_PRIVATE_KEY')),
-        email: Boolean(this.config.get<string>('SMTP_HOST') && this.config.get<string>('SMTP_USER')),
+        googleCalendar: Boolean(
+          this.config.get<string>('GOOGLE_CLIENT_EMAIL') &&
+            this.config.get<string>('GOOGLE_PRIVATE_KEY'),
+        ),
+        email: Boolean(
+          this.config.get<string>('SMTP_HOST') &&
+            this.config.get<string>('SMTP_USER'),
+        ),
       },
     };
   }
