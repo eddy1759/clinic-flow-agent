@@ -11,10 +11,15 @@ export class SecurityService {
   private readonly AUTH_TAG_LENGTH = 16;
 
   constructor(private config: ConfigService) {
-    const secret = this.config.getOrThrow<string>('ENCRYTPION_SECRET_KEY');
+    const secret =
+      this.config.get<string>('ENCRYPTION_SECRET_KEY') ??
+      this.config.get<string>('ENCRYTPION_SECRET_KEY');
 
+    if (!secret) {
+      throw new Error('ENCRYPTION_SECRET_KEY is required');
+    }
     if (secret.length !== 32) {
-      throw new Error('Encryption_KEY must be 32 characters');
+      throw new Error('ENCRYPTION_SECRET_KEY must be exactly 32 characters');
     }
 
     this.key = crypto.scryptSync(secret, this.SALT, 32);
@@ -36,8 +41,7 @@ export class SecurityService {
 
       const authTag = cipher.getAuthTag();
       return Buffer.concat([iv, authTag, encrypted]).toString('hex');
-    } catch (error) {
-      console.log(error);
+    } catch {
       throw new InternalServerErrorException('Failed to encrypt data.');
     }
   }
@@ -45,6 +49,9 @@ export class SecurityService {
   decrypt(text: string): string {
     try {
       const data = Buffer.from(text, 'hex');
+      if (data.length <= this.IV_LENGTH + this.AUTH_TAG_LENGTH) {
+        throw new Error('Invalid encrypted payload');
+      }
       const iv = data.subarray(0, this.IV_LENGTH);
       const authTag = data.subarray(
         this.IV_LENGTH,
@@ -67,8 +74,7 @@ export class SecurityService {
       ]);
 
       return decrypted.toString('utf8');
-    } catch (error) {
-      console.log(error);
+    } catch {
       throw new InternalServerErrorException('Failed to decrypt data.');
     }
   }

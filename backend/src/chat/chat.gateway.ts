@@ -12,8 +12,13 @@ import { Server, Socket } from 'socket.io';
 import { AgentService } from 'src/agent/agent.service';
 import { VoiceService } from 'src/voice/voice.service';
 
+const websocketOrigins = (process.env.CORS_ORIGINS ?? 'http://localhost:3000')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 @WebSocketGateway({
-  cors: { origin: '*' },
+  cors: { origin: websocketOrigins, credentials: true },
   namespace: 'events',
 })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -28,11 +33,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {}
 
   handleConnection(client: Socket) {
-    this.logger.log(`Client Connected: ${client.id}`);
+    this.logger.log({ event: 'SOCKET_CONNECTED', clientId: client.id });
   }
 
   handleDisconnect(client: Socket) {
-    this.logger.log(`Client Disconnected: ${client.id}`);
+    this.logger.log({ event: 'SOCKET_DISCONNECTED', clientId: client.id });
   }
 
   @SubscribeMessage('user_text')
@@ -40,8 +45,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: { userId: string; text: string },
     @ConnectedSocket() client: Socket,
   ) {
-    this.logger.log(`📝 Text from ${payload.userId}: "${payload.text}"`);
-
+    this.logger.log({
+      event: 'TEXT_RECEIVED',
+      clientId: client.id,
+      characters: payload.text?.length ?? 0,
+    });
     client.emit('bot_status', { status: 'thinking' });
 
     try {
@@ -68,14 +76,16 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: { userId: string; audio: Buffer },
     @ConnectedSocket() client: Socket,
   ) {
-    this.logger.log(`🎤 Voice received from ${payload.userId}`);
+    this.logger.log({
+      event: 'VOICE_RECEIVED',
+      clientId: client.id,
+      bytes: (payload.audio as any)?.length ?? 0,
+    });
     client.emit('bot_status', { status: 'transcribing' });
 
     try {
       if (!payload.audio || (payload.audio as any).length < 1000) {
-        this.logger.warn(
-          `Empty or too short audio payload from ${payload.userId}`,
-        );
+        this.logger.warn({ event: 'VOICE_TOO_SHORT', clientId: client.id });
         client.emit('bot_status', { status: 'idle' });
         return;
       }
@@ -84,13 +94,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         Buffer.from(payload.audio),
       );
 
-      const isHallucination = this.checkHallucination(transcript);
-      if (isHallucination) {
+      if (this.checkHallucination(transcript)) {
         client.emit('bot_status', { status: 'idle' });
         return;
       }
-
-      this.logger.log(`   Transcript: "${transcript}"`);
 
       client.emit('user_transcript', { text: transcript });
       client.emit('bot_status', { status: 'thinking' });
@@ -98,7 +105,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const responseText = await this.agentService.handleMessage(
         payload.userId,
         transcript,
-        'VOICE', // Channel
+        'VOICE',
       );
 
       client.emit('bot_status', { status: 'speaking' });
@@ -117,9 +124,14 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   private handleError(client: Socket, error: any) {
-    this.logger.error(error);
+    this.logger.error({
+      event: 'SOCKET_PROCESSING_FAILED',
+      clientId: client.id,
+      message: error?.message ?? 'Unknown error',
+    });
     client.emit('error_message', {
-      message: error.message || 'Something went wrong processing your request.',
+      message:
+        'Something went wrong processing your request. Please try again.',
     });
   }
 
@@ -133,7 +145,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     ];
 
     if (badPhrases.some((p) => lower.includes(p)) || lower.length < 2) {
-      this.logger.warn(`Ignored Hallucination: "${text}"`);
+      this.logger.warn({
+        event: 'TRANSCRIPT_REJECTED',
+        reason: 'known_hallucination_or_empty',
+      });
       return true;
     }
     return false;

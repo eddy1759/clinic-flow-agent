@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { AppService } from './app.service';
 import { SecurityService } from './security/security.service';
 import { MessagingController } from './messaging/messaging.controller';
 import { SchedulingService } from './scheduling/scheduling.service';
@@ -10,12 +9,12 @@ import { EmailService } from './common/email/email.service';
 import { VoiceController } from './voice/voice.controller';
 import { VoiceService } from './voice/voice.service';
 import { ChatGateway } from './chat/chat.gateway';
+import { HealthController } from './health/health.controller';
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true })],
-  controllers: [MessagingController, VoiceController],
+  controllers: [MessagingController, VoiceController, HealthController],
   providers: [
-    AppService,
     SecurityService,
     PrismaService,
     SchedulingService,
