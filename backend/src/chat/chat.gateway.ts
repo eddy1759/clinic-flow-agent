@@ -45,7 +45,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: { userId: string; text: string },
     @ConnectedSocket() client: Socket,
   ) {
-    this.logger.log({ event: 'TEXT_RECEIVED', clientId: client.id, characters: payload.text?.length ?? 0 });
+    this.logger.log({
+      event: 'TEXT_RECEIVED',
+      clientId: client.id,
+      characters: payload.text?.length ?? 0,
+    });
     client.emit('bot_status', { status: 'thinking' });
 
     try {
@@ -72,7 +76,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: { userId: string; audio: Buffer },
     @ConnectedSocket() client: Socket,
   ) {
-    this.logger.log({ event: 'VOICE_RECEIVED', clientId: client.id, bytes: (payload.audio as any)?.length ?? 0 });
+    this.logger.log({
+      event: 'VOICE_RECEIVED',
+      clientId: client.id,
+      bytes: (payload.audio as any)?.length ?? 0,
+    });
     client.emit('bot_status', { status: 'transcribing' });
 
     try {
@@ -116,9 +124,14 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   private handleError(client: Socket, error: any) {
-    this.logger.error({ event: 'SOCKET_PROCESSING_FAILED', clientId: client.id, message: error?.message ?? 'Unknown error' });
+    this.logger.error({
+      event: 'SOCKET_PROCESSING_FAILED',
+      clientId: client.id,
+      message: error?.message ?? 'Unknown error',
+    });
     client.emit('error_message', {
-      message: 'Something went wrong processing your request. Please try again.',
+      message:
+        'Something went wrong processing your request. Please try again.',
     });
   }
 
@@ -132,7 +145,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     ];
 
     if (badPhrases.some((p) => lower.includes(p)) || lower.length < 2) {
-      this.logger.warn({ event: 'TRANSCRIPT_REJECTED', reason: 'known_hallucination_or_empty' });
+      this.logger.warn({
+        event: 'TRANSCRIPT_REJECTED',
+        reason: 'known_hallucination_or_empty',
+      });
       return true;
     }
     return false;
